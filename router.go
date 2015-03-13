@@ -78,12 +78,15 @@ package httprouter
 
 import (
 	"net/http"
+
+	"github.com/mantishK/wormhole/app/filters"
 )
 
 // Handle is a function that can be registered to a route to handle HTTP
 // requests. Like http.HandlerFunc, but has a third parameter for the values of
 // wildcards (variables).
-type Handle func(http.ResponseWriter, *http.Request, Params)
+// type Handle func(http.ResponseWriter, *http.Request, Params)
+type Handle func(http.ResponseWriter, *http.Request, Params, map[string]interface{})
 
 // Param is a single URL parameter, consisting of a key and a value.
 type Param struct {
@@ -169,33 +172,33 @@ func New() *Router {
 }
 
 // GET is a shortcut for router.Handle("GET", path, handle)
-func (r *Router) GET(path string, handle Handle) {
-	r.Handle("GET", path, handle)
+func (r *Router) GET(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("GET", path, handle, filterSlice...)
 }
 
 // HEAD is a shortcut for router.Handle("HEAD", path, handle)
-func (r *Router) HEAD(path string, handle Handle) {
-	r.Handle("HEAD", path, handle)
+func (r *Router) HEAD(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("HEAD", path, handle, filterSlice...)
 }
 
 // POST is a shortcut for router.Handle("POST", path, handle)
-func (r *Router) POST(path string, handle Handle) {
-	r.Handle("POST", path, handle)
+func (r *Router) POST(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("POST", path, handle, filterSlice...)
 }
 
 // PUT is a shortcut for router.Handle("PUT", path, handle)
-func (r *Router) PUT(path string, handle Handle) {
-	r.Handle("PUT", path, handle)
+func (r *Router) PUT(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("PUT", path, handle, filterSlice...)
 }
 
 // PATCH is a shortcut for router.Handle("PATCH", path, handle)
-func (r *Router) PATCH(path string, handle Handle) {
-	r.Handle("PATCH", path, handle)
+func (r *Router) PATCH(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("PATCH", path, handle, filterSlice...)
 }
 
 // DELETE is a shortcut for router.Handle("DELETE", path, handle)
-func (r *Router) DELETE(path string, handle Handle) {
-	r.Handle("DELETE", path, handle)
+func (r *Router) DELETE(path string, handle Handle, filterSlice ...filters.Filterable) {
+	r.Handle("DELETE", path, handle, filterSlice...)
 }
 
 // Handle registers a new request handle with the given path and method.
@@ -206,7 +209,7 @@ func (r *Router) DELETE(path string, handle Handle) {
 // This function is intended for bulk loading and to allow the usage of less
 // frequently used, non-standardized or custom methods (e.g. for internal
 // communication with a proxy).
-func (r *Router) Handle(method, path string, handle Handle) {
+func (r *Router) Handle(method, path string, handle Handle, filterSlice ...filters.Filterable) {
 	if path[0] != '/' {
 		panic("path must begin with '/'")
 	}
@@ -221,14 +224,14 @@ func (r *Router) Handle(method, path string, handle Handle) {
 		r.trees[method] = root
 	}
 
-	root.addRoute(path, handle)
+	root.addRoute(path, handle, filterSlice...)
 }
 
 // Handler is an adapter which allows the usage of an http.Handler as a
 // request handle.
 func (r *Router) Handler(method, path string, handler http.Handler) {
 	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, _ Params) {
+		func(w http.ResponseWriter, req *http.Request, _ Params, _ map[string]interface{}) {
 			handler.ServeHTTP(w, req)
 		},
 	)
@@ -238,7 +241,7 @@ func (r *Router) Handler(method, path string, handler http.Handler) {
 // request handle.
 func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
 	r.Handle(method, path,
-		func(w http.ResponseWriter, req *http.Request, _ Params) {
+		func(w http.ResponseWriter, req *http.Request, _ Params, _ map[string]interface{}) {
 			handler(w, req)
 		},
 	)
@@ -261,7 +264,7 @@ func (r *Router) ServeFiles(path string, root http.FileSystem) {
 
 	fileServer := http.FileServer(root)
 
-	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params) {
+	r.GET(path, func(w http.ResponseWriter, req *http.Request, ps Params, _ map[string]interface{}) {
 		req.URL.Path = ps.ByName("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
@@ -278,11 +281,11 @@ func (r *Router) recv(w http.ResponseWriter, req *http.Request) {
 // If the path was found, it returns the handle function and the path parameter
 // values. Otherwise the third return value indicates whether a redirection to
 // the same path with an extra / without the trailing slash should be performed.
-func (r *Router) Lookup(method, path string) (Handle, Params, bool) {
+func (r *Router) Lookup(method, path string) (Handle, Params, *middlewareNode, bool) {
 	if root := r.trees[method]; root != nil {
 		return root.getValue(path)
 	}
-	return nil, nil, false
+	return nil, nil, nil, false
 }
 
 // ServeHTTP makes the router implement the http.Handler interface.
@@ -294,8 +297,19 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if root := r.trees[req.Method]; root != nil {
 		path := req.URL.Path
 
-		if handle, ps, tsr := root.getValue(path); handle != nil {
-			handle(w, req, ps)
+		if handle, ps, mN, tsr := root.getValue(path); handle != nil {
+			allow := true
+			filterMap := make(map[string]interface{})
+			for mN != nil {
+				allow = mN.filter.Filter(w, req, filterMap)
+				if allow == false {
+					break
+				}
+				mN = mN.next
+			}
+			if allow == true {
+				handle(w, req, ps, filterMap)
+			}
 			return
 		} else if req.Method != "CONNECT" && path != "/" {
 			code := 301 // Permanent redirect, request with GET method
@@ -338,7 +352,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 
-			handle, _, _ := r.trees[method].getValue(req.URL.Path)
+			handle, _, _, _ := r.trees[method].getValue(req.URL.Path)
 			if handle != nil {
 				if r.MethodNotAllowed != nil {
 					r.MethodNotAllowed(w, req)

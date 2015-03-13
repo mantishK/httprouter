@@ -7,6 +7,8 @@ package httprouter
 import (
 	"strings"
 	"unicode"
+
+	"github.com/mantishK/wormhole/app/filters"
 )
 
 func min(a, b int) int {
@@ -38,6 +40,11 @@ const (
 	catchAll nodeType = 2
 )
 
+type middlewareNode struct {
+	next   *middlewareNode
+	filter filters.Filterable
+}
+
 type node struct {
 	path      string
 	wildChild bool
@@ -47,6 +54,7 @@ type node struct {
 	children  []*node
 	handle    Handle
 	priority  uint32
+	mN        *middlewareNode
 }
 
 // increments priority of the given child and reorders if necessary
@@ -77,7 +85,7 @@ func (n *node) incrementChildPrio(pos int) int {
 
 // addRoute adds a node with the given handle to the path.
 // Not concurrency-safe!
-func (n *node) addRoute(path string, handle Handle) {
+func (n *node) addRoute(path string, handle Handle, filterSlice ...filters.Filterable) {
 	n.priority++
 	numParams := countParams(path)
 
@@ -108,6 +116,7 @@ func (n *node) addRoute(path string, handle Handle) {
 					children:  n.children,
 					handle:    n.handle,
 					priority:  n.priority - 1,
+					mN:        n.mN,
 				}
 
 				// Update maxParams (max of all children)
@@ -177,7 +186,7 @@ func (n *node) addRoute(path string, handle Handle) {
 					n.incrementChildPrio(len(n.indices) - 1)
 					n = child
 				}
-				n.insertChild(numParams, path, handle)
+				n.insertChild(numParams, path, handle, filterSlice...)
 				return
 
 			} else if i == len(path) { // Make node a (in-path) leaf
@@ -189,11 +198,12 @@ func (n *node) addRoute(path string, handle Handle) {
 			return
 		}
 	} else { // Empty tree
-		n.insertChild(numParams, path, handle)
+		n.insertChild(numParams, path, handle, filterSlice...)
 	}
 }
 
-func (n *node) insertChild(numParams uint8, path string, handle Handle) {
+func (n *node) insertChild(numParams uint8, path string, handle Handle,
+	filterSlice ...filters.Filterable) {
 	var offset int // already handled bytes of the path
 
 	// find prefix until first wildcard (beginning with ':'' or '*'')
@@ -286,12 +296,14 @@ func (n *node) insertChild(numParams uint8, path string, handle Handle) {
 			n.priority++
 
 			// second node: node holding the variable
+			mLList := filterToLList(filterSlice...)
 			child = &node{
 				path:      path[i:],
 				nType:     catchAll,
 				maxParams: 1,
 				handle:    handle,
 				priority:  1,
+				mN:        mLList,
 			}
 			n.children = []*node{child}
 
@@ -300,8 +312,26 @@ func (n *node) insertChild(numParams uint8, path string, handle Handle) {
 	}
 
 	// insert remaining path part and handle to the leaf
+	mLList := filterToLList(filterSlice...)
 	n.path = path[offset:]
 	n.handle = handle
+	n.mN = mLList
+}
+
+func filterToLList(filterSlice ...filters.Filterable) *middlewareNode {
+	var first *middlewareNode
+	var mNPrev *middlewareNode
+	for _, filter := range filterSlice {
+		mN := &middlewareNode{filter: filter, next: nil}
+		if first == nil {
+			first = mN
+		}
+		if mNPrev != nil {
+			mNPrev.next = mN
+		}
+		mNPrev = mN
+	}
+	return first
 }
 
 // Returns the handle registered with the given path (key). The values of
@@ -309,7 +339,7 @@ func (n *node) insertChild(numParams uint8, path string, handle Handle) {
 // If no handle can be found, a TSR (trailing slash redirect) recommendation is
 // made if a handle exists with an extra (without the) trailing slash for the
 // given path.
-func (n *node) getValue(path string) (handle Handle, p Params, tsr bool) {
+func (n *node) getValue(path string) (handle Handle, p Params, mN *middlewareNode, tsr bool) {
 walk: // Outer loop for walking the tree
 	for {
 		if len(path) > len(n.path) {
@@ -367,7 +397,7 @@ walk: // Outer loop for walking the tree
 						tsr = (len(path) == end+1)
 						return
 					}
-
+					mN = n.mN
 					if handle = n.handle; handle != nil {
 						return
 					} else if len(n.children) == 1 {
@@ -391,6 +421,7 @@ walk: // Outer loop for walking the tree
 					p[i].Value = path
 
 					handle = n.handle
+					mN = n.mN
 					return
 
 				default:
@@ -400,6 +431,7 @@ walk: // Outer loop for walking the tree
 		} else if path == n.path {
 			// We should have reached the node containing the handle.
 			// Check if this node has a handle registered.
+			mN = n.mN
 			if handle = n.handle; handle != nil {
 				return
 			}
@@ -411,6 +443,7 @@ walk: // Outer loop for walking the tree
 					n = n.children[i]
 					tsr = (len(n.path) == 1 && n.handle != nil) ||
 						(n.nType == catchAll && n.children[0].handle != nil)
+					mN = n.mN
 					return
 				}
 			}
@@ -423,6 +456,7 @@ walk: // Outer loop for walking the tree
 		tsr = (path == "/") ||
 			(len(n.path) == len(path)+1 && n.path[len(path)] == '/' &&
 				path == n.path[:len(n.path)-1] && n.handle != nil)
+		mN = n.mN
 		return
 	}
 }

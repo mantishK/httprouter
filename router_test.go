@@ -49,7 +49,7 @@ func TestRouter(t *testing.T) {
 	router := New()
 
 	routed := false
-	router.Handle("GET", "/user/:name", func(w http.ResponseWriter, r *http.Request, ps Params) {
+	router.Handle("GET", "/user/:name", func(w http.ResponseWriter, r *http.Request, ps Params, fM map[string]interface{}) {
 		routed = true
 		want := Params{Param{"name", "gopher"}}
 		if !reflect.DeepEqual(ps, want) {
@@ -81,22 +81,22 @@ func TestRouterAPI(t *testing.T) {
 	httpHandler := handlerStruct{&handler}
 
 	router := New()
-	router.GET("/GET", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.GET("/GET", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		get = true
 	})
-	router.HEAD("/GET", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.HEAD("/GET", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		head = true
 	})
-	router.POST("/POST", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.POST("/POST", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		post = true
 	})
-	router.PUT("/PUT", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.PUT("/PUT", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		put = true
 	})
-	router.PATCH("/PATCH", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.PATCH("/PATCH", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		patch = true
 	})
-	router.DELETE("/DELETE", func(w http.ResponseWriter, r *http.Request, _ Params) {
+	router.DELETE("/DELETE", func(w http.ResponseWriter, r *http.Request, _ Params, _ map[string]interface{}) {
 		delete = true
 	})
 	router.Handler("GET", "/Handler", httpHandler)
@@ -166,7 +166,7 @@ func TestRouterRoot(t *testing.T) {
 }
 
 func TestRouterNotAllowed(t *testing.T) {
-	handlerFunc := func(_ http.ResponseWriter, _ *http.Request, _ Params) {}
+	handlerFunc := func(_ http.ResponseWriter, _ *http.Request, _ Params, _ map[string]interface{}) {}
 
 	router := New()
 	router.POST("/path", handlerFunc)
@@ -195,7 +195,7 @@ func TestRouterNotAllowed(t *testing.T) {
 }
 
 func TestRouterNotFound(t *testing.T) {
-	handlerFunc := func(_ http.ResponseWriter, _ *http.Request, _ Params) {}
+	handlerFunc := func(_ http.ResponseWriter, _ *http.Request, _ Params, _ map[string]interface{}) {}
 
 	router := New()
 	router.GET("/path", handlerFunc)
@@ -267,7 +267,7 @@ func TestRouterPanicHandler(t *testing.T) {
 		panicHandled = true
 	}
 
-	router.Handle("PUT", "/user/:name", func(_ http.ResponseWriter, _ *http.Request, _ Params) {
+	router.Handle("PUT", "/user/:name", func(_ http.ResponseWriter, _ *http.Request, _ Params, _ map[string]interface{}) {
 		panic("oops!")
 	})
 
@@ -289,7 +289,7 @@ func TestRouterPanicHandler(t *testing.T) {
 
 func TestRouterLookup(t *testing.T) {
 	routed := false
-	wantHandle := func(_ http.ResponseWriter, _ *http.Request, _ Params) {
+	wantHandle := func(_ http.ResponseWriter, _ *http.Request, _ Params, _ map[string]interface{}) {
 		routed = true
 	}
 	wantParams := Params{Param{"name", "gopher"}}
@@ -297,7 +297,7 @@ func TestRouterLookup(t *testing.T) {
 	router := New()
 
 	// try empty router first
-	handle, _, tsr := router.Lookup("GET", "/nope")
+	handle, _, _, tsr := router.Lookup("GET", "/nope")
 	if handle != nil {
 		t.Fatalf("Got handle for unregistered pattern: %v", handle)
 	}
@@ -308,11 +308,11 @@ func TestRouterLookup(t *testing.T) {
 	// insert route and try again
 	router.GET("/user/:name", wantHandle)
 
-	handle, params, tsr := router.Lookup("GET", "/user/gopher")
+	handle, params, _, tsr := router.Lookup("GET", "/user/gopher")
 	if handle == nil {
 		t.Fatal("Got no handle!")
 	} else {
-		handle(nil, nil, nil)
+		handle(nil, nil, nil, nil)
 		if !routed {
 			t.Fatal("Routing failed!")
 		}
@@ -322,7 +322,7 @@ func TestRouterLookup(t *testing.T) {
 		t.Fatalf("Wrong parameter values: want %v, got %v", wantParams, params)
 	}
 
-	handle, _, tsr = router.Lookup("GET", "/user/gopher/")
+	handle, _, _, tsr = router.Lookup("GET", "/user/gopher/")
 	if handle != nil {
 		t.Fatalf("Got handle for unregistered pattern: %v", handle)
 	}
@@ -330,7 +330,7 @@ func TestRouterLookup(t *testing.T) {
 		t.Error("Got no TSR recommendation!")
 	}
 
-	handle, _, tsr = router.Lookup("GET", "/nope")
+	handle, _, _, tsr = router.Lookup("GET", "/nope")
 	if handle != nil {
 		t.Fatalf("Got handle for unregistered pattern: %v", handle)
 	}

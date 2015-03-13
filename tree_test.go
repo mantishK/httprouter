@@ -26,7 +26,7 @@ func printChildren(n *node, prefix string) {
 var fakeHandlerValue string
 
 func fakeHandler(val string) Handle {
-	return func(http.ResponseWriter, *http.Request, Params) {
+	return func(http.ResponseWriter, *http.Request, Params, map[string]interface{}) {
 		fakeHandlerValue = val
 	}
 }
@@ -40,7 +40,7 @@ type testRequests []struct {
 
 func checkRequests(t *testing.T, tree *node, requests testRequests) {
 	for _, request := range requests {
-		handler, ps, _ := tree.getValue(request.path)
+		handler, ps, _, _ := tree.getValue(request.path)
 
 		if handler == nil {
 			if !request.nilHandler {
@@ -49,7 +49,7 @@ func checkRequests(t *testing.T, tree *node, requests testRequests) {
 		} else if request.nilHandler {
 			t.Errorf("handle mismatch for route '%s': Expected nil handle", request.path)
 		} else {
-			handler(nil, nil, nil)
+			handler(nil, nil, nil, nil)
 			if fakeHandlerValue != request.route {
 				t.Errorf("handle mismatch for route '%s': Wrong handle (%s != %s)", request.path, fakeHandlerValue, request.route)
 			}
@@ -422,7 +422,7 @@ func TestTreeTrailingSlashRedirect(t *testing.T) {
 		"/doc/",
 	}
 	for _, route := range tsrRoutes {
-		handler, _, tsr := tree.getValue(route)
+		handler, _, _, tsr := tree.getValue(route)
 		if handler != nil {
 			t.Fatalf("non-nil handler for TSR route '%s", route)
 		} else if !tsr {
@@ -439,7 +439,7 @@ func TestTreeTrailingSlashRedirect(t *testing.T) {
 		"/api/world/abc",
 	}
 	for _, route := range noTsrRoutes {
-		handler, _, tsr := tree.getValue(route)
+		handler, _, _, tsr := tree.getValue(route)
 		if handler != nil {
 			t.Fatalf("non-nil handler for No-TSR route '%s", route)
 		} else if tsr {
